@@ -6,6 +6,5 @@
   "author": {
     "name": "dktmzdf",
     "email": "dktmzdf@gmail.com"
-  },
-  "hooks": "./hooks/hooks.json"
+  }
 }
