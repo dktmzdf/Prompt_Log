@@ -1,0 +1,11 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "prompt-log",
+  "version": "0.1.0",
+  "description": "세션 JSONL을 사람이 읽는 리포트(요약 .md + 상세 .jsonl)로 내보낸다. 로그를 새로 쌓지 않고 Claude Code가 이미 남기는 기록을 읽는다.",
+  "author": {
+    "name": "dktmzdf",
+    "email": "dktmzdf@gmail.com"
+  },
+  "hooks": "./hooks/hooks.json"
+}

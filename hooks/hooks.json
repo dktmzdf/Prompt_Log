@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/export.py\"",
+            "commandWindows": "python \"$env:CLAUDE_PLUGIN_ROOT\\scripts\\export.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

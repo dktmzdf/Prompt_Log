@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "prompt-log",
+  "description": "Claude Code 세션 기록을 사람이 읽는 날짜별 리포트로 내보낸다.",
+  "owner": {
+    "name": "dktmzdf",
+    "email": "dktmzdf@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "prompt-log",
+      "description": "세션 JSONL을 요약 .md와 상세 .jsonl로 내보낸다. 로그를 새로 쌓지 않고 Claude Code가 이미 남기는 기록을 읽는다.",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}
