@@ -68,11 +68,18 @@ def hhmmss(iso):
 # ---------------------------------------------------------------- 읽기/판별
 
 def load(path):
-    """JSONL을 읽어 timestamp로 정렬해 돌려준다.
+    """JSONL을 읽어 timestamp로 정렬해 돌려준다. 남의 세션 레코드는 뺀다.
 
     compact/resume 때문에 파일은 시간순이 아니다(실측: 09:32 → 03:46 → 03:41).
     정렬하지 않으면 리포트 순서가 뒤죽박죽 된다.
+
+    resume하면 조상 세션 전체가 새 파일로 복사된다 — 실측상 61개 중 7개가 그렇고,
+    ff351233.jsonl은 3,414개 중 자기 레코드가 4개뿐이다. 그대로 두면 같은 대화가
+    세션 수만큼 중복 리포트로 나온다(실측 116묶음 중 26개가 중복 사본).
+    복사본만 있고 원본 파일이 없는 세션은 0개라, 걸러도 잃는 대화가 없다.
+    sessionId가 아예 없는 레코드(file-history-snapshot 등)는 그대로 둔다.
     """
+    sid = Path(path).stem
     recs = []
     with open(path, encoding="utf-8") as fh:
         for line in fh:
@@ -80,9 +87,11 @@ def load(path):
             if not line:
                 continue
             try:
-                recs.append(json.loads(line))
+                rec = json.loads(line)
             except ValueError:
                 continue  # 쓰는 중이라 잘린 마지막 줄일 수 있다
+            if rec.get("sessionId", sid) == sid:
+                recs.append(rec)
     recs.sort(key=lambda r: r.get("timestamp") or "")
     return recs
 
@@ -320,14 +329,6 @@ def build(recs):
         if rec.get("toolDenialKind"):
             stats["denials"][rec["toolDenialKind"]] += 1
 
-        if is_human_prompt(rec):
-            said = prompt_text(rec.get("message", {}).get("content"))
-        elif rtype == "user":
-            said = denial_feedback(rec)
-            via = "도구 거부와 함께"
-            if not said:
-                said = slash_command(rec)
-                via = "슬래시 커맨드"
         if said:
             prompts.append({"ts": rec.get("timestamp", ""), "text": said,
                             "via": via, "items": []})
@@ -549,7 +550,7 @@ def selftest():
     import tempfile
 
     def rec(**kw):
-        kw.setdefault("sessionId", "s")
+        kw.setdefault("sessionId", "sess")  # 파일명과 같아야 자기 세션으로 인정된다
         return json.dumps(kw, ensure_ascii=False)
 
     img = {"type": "image", "source": {"type": "base64", "media_type": "image/png",
@@ -580,6 +581,9 @@ def selftest():
         rec(type="user", timestamp="2026-01-01T00:00:15Z", cwd="/tmp/proj",
             message={"content": [{"type": "tool_result", "tool_use_id": "t1",
                                   "content": "X" * 9000}]}),
+        # resume가 복사해 온 조상 세션 레코드 — 원본 파일에서 뽑히므로 여기선 빠져야 한다
+        rec(type="user", timestamp="2026-01-01T00:00:35Z", sessionId="ancestor",
+            cwd="/tmp/proj", message={"content": "남의 세션 프롬프트"}),
         # 슬래시 커맨드 — 버리면 뒤따르는 도구가 직전 프롬프트에 잘못 붙는다
         rec(type="user", timestamp="2026-01-01T00:00:40Z",
             message={"content": "<command-name>/compact</command-name>\n"
@@ -638,7 +642,7 @@ def selftest():
                  "input": {"file_path": "/tmp/big.txt", "content": "Y" * 9000}}]}),
     ]
     with tempfile.TemporaryDirectory() as tmp:
-        src = Path(tmp) / "sess.jsonl"
+        src = Path(tmp) / "sess.jsonl"  # stem이 곧 세션ID — 남의 레코드 판별 기준
         src.write_text("\n".join(lines), encoding="utf-8")
         recs = load(src)
         buckets = build(recs)
@@ -660,6 +664,9 @@ def selftest():
         assert DENIAL_MARKER not in prompts[3]["text"]  # 안내 문구는 안 섞인다
         # 마커가 담긴 평범한 도구 출력은 지시로 오인하지 않는다
         assert "남의 말" not in [p["text"] for p in prompts]
+        # (y) resume가 복사해 온 조상 세션 레코드는 빠진다 — 안 그러면 같은 대화가
+        #     세션 수만큼 중복 리포트로 나온다 (실측 116묶음 중 26개가 중복 사본)
+        assert "남의 세션 프롬프트" not in [p["text"] for p in prompts], prompts
         # (b) 도구가 올바른 프롬프트에 귀속.
         #     슬래시 커맨드 뒤의 NotebookEdit이 첫 프롬프트로 새지 않는 게 핵심이다.
         tools_of = lambda p: [(a, b) for k, a, b in p["items"] if k == "tool"]
@@ -731,7 +738,7 @@ def selftest():
     selftest_days()
     print("자기검사 통과 — 정렬·귀속·필터·첨부·페어링·절단·요약·UUID·거부지시·"
           "슬래시커맨드·슬러그·노트북·input절단·타임존·대화인터리브·제목강등·"
-          "코드블록·생각접기·날짜분할·턴보존·경로구조 22항목")
+          "코드블록·생각접기·날짜분할·턴보존·경로구조·조상세션제외 23항목")
 
 
 def selftest_days():

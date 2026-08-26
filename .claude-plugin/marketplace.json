@@ -3,8 +3,7 @@
   "name": "prompt-log",
   "description": "Claude Code 세션 기록을 사람이 읽는 날짜별 리포트로 내보낸다.",
   "owner": {
-    "name": "dktmzdf",
-    "email": "dktmzdf@gmail.com"
+    "name": "dktmzdf"
   },
   "plugins": [
     {
