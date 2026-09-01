@@ -1,0 +1,20 @@
+{
+  "name": "prompt-log",
+  "version": "0.2.0",
+  "description": "Claude Code와 Codex 세션 JSONL을 범용 리포트(요약 .md + 상세 .jsonl)로 내보낸다.",
+  "author": {
+    "name": "dktmzdf"
+  },
+  "interface": {
+    "displayName": "Prompt Log",
+    "shortDescription": "Claude와 Codex 세션을 읽기 좋은 리포트로 내보냅니다.",
+    "longDescription": "기존 Claude Code와 Codex transcript를 날짜별 Markdown 요약과 중립 JSONL 이벤트 스트림으로 변환합니다.",
+    "developerName": "dktmzdf",
+    "category": "Productivity",
+    "capabilities": ["Read session logs", "Export reports"],
+    "defaultPrompt": [
+      "이번 세션의 프롬프트 로그를 리포트로 내보내 줘.",
+      "Codex와 Claude의 과거 세션 로그를 모두 백필해 줘."
+    ]
+  }
+}

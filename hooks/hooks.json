@@ -5,8 +5,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/export.py\"",
-            "commandWindows": "python \"$env:CLAUDE_PLUGIN_ROOT\\scripts\\export.py\"",
+            "command": "python3 \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/export.py\"",
+            "commandWindows": "$pluginRoot = if ($env:PLUGIN_ROOT) { $env:PLUGIN_ROOT } else { $env:CLAUDE_PLUGIN_ROOT }; python \"$pluginRoot\\scripts\\export.py\"",
             "timeout": 10
           }
         ]
