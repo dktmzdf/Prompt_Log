@@ -1,3 +1,36 @@
+# OS
 .DS_Store
+Thumbs.db
+
+# Archives (built by CI)
+*.tar.gz
+*.zip
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.*
+!.env.example
+
 __pycache__/
 *.pyc
+Ignore
+reviews/
+logs/
+MESSAGE
+.no-review
+
+#temp 임시로 무시하는 곳
+.claude
+.codex
+.claude
+.codexplugin
+.claudeplugin
+.githooks
+docs
+jobs

@@ -41,10 +41,16 @@ completed item도 버리지 않고 일반 도구 이벤트로 보존합니다.
 Claude와 Codex에 공통인 다음 이벤트 형태로 내보냅니다.
 
 ```json
-{"seq": 12, "agent": "codex", "session_id": "...", "kind": "tool", "name": "Bash", "input": {}, "output": "...", "ok": true}
+{"seq": 12, "agent": "codex", "session_id": "...", "kind": "tool", "name": "Bash", "input": {}, "output": "...", "status": "success", "ok": true}
 ```
 
-도구 결과는 재현성을 위해 요약하지 않고 4KB를 넘을 때 가운데만 절단합니다.
+도구 상태는 `success`, `failed`, `in_progress`, `unknown`으로 구분합니다.
+호환 필드 `ok`는 성공이면 `true`, 실패면 `false`, 미확정이면 `null`입니다.
+수정된 파일 집계에는 성공이 확인된 호출만 포함됩니다.
+
+도구 입력의 각 문자열·도구 출력·생각은 UTF-8 기준 4,096바이트를 넘으면 앞 3,072바이트와
+뒤 1,024바이트 이내의 완전한 문자를 남깁니다. 생략 안내문 길이는 이 한도에 포함하지
+않습니다. 프롬프트·답변은 자르지 않으며, 어댑터와 공통 집계 단계에서는 절단하지 않습니다.
 
 ## 설치
 
@@ -76,7 +82,7 @@ python scripts/export.py --all --agent claude
 # 특정 세션(내용으로 형식 자동 판별)
 python scripts/export.py <session.jsonl>
 
-# 다른 출력 루트에서 드라이런
+# 다른 출력 루트에 시험 리포트 생성 (실제로 파일을 씁니다)
 python scripts/export.py <session.jsonl> --output <temporary-directory>
 
 # 내장 회귀검사
@@ -94,5 +100,23 @@ Windows에서는 `python`, macOS/Linux에서는 환경에 따라 `python3`를 �
 - Codex legacy 로그의 `external_agent_tool_call/result` 마커도 도구 이벤트로 복원합니다.
 - 파일 경로에 포함된 UUID는 재현에 필요하므로 보존하고, 원본의 구조적 호출 UUID는 제거합니다.
 - 결과 생성은 멱등입니다. 같은 세션을 다시 내보내면 같은 경로의 리포트를 갱신합니다.
+- Codex 누적 토큰은 이전 합계와의 차이만 더합니다. 누적값이 없는 기록은 개별 사용량으로
+  처리하므로, 값이 같다는 이유만으로 정상적인 별도 사용량을 제거하지 않습니다.
+- 수동 실행·백필·자기검사 실패는 비정상 종료 코드로 알립니다. `Stop` 훅에서 발생한
+  리포트 오류는 stderr에 남기고 세션을 차단하지 않습니다.
 
-표준 라이브러리만 사용하며 별도 Python 패키지가 필요하지 않습니다.
+Python 3.10 이상과 표준 라이브러리만 사용하며 별도 실행 의존성이 없습니다.
+
+## 코드 구조와 공부 순서
+
+`scripts/export.py`는 CLI·훅 진입점이고, 구현은 `scripts/promptlog/`에 있습니다.
+
+1. `models.py`: 어댑터가 반환하는 `SessionLog`, `Session`, `Event` 계약
+2. `adapters/claude.py`, `adapters/codex.py`: 원본 JSONL → 공통 이벤트 변환
+3. `assemble.py`: 두 소스가 공유하는 날짜·대화 묶음·통계 집계
+4. `render.py`, `text.py`: 출력 직전 절단과 Markdown·JSONL 생성
+5. `service.py`, `storage.py`, `cli.py`: 전체 연결·파일 저장·실행 모드
+
+리팩터링 이유, 동작 차이, 검증 결과와 후속 작업은 [작업 문서](docs/refactoring.md)에
+기록했습니다. 전체 회귀검사는 `python -B scripts/export.py --selftest` 또는
+`python -B -m unittest discover -s tests -v`로 실행합니다.
