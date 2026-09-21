@@ -25,12 +25,17 @@ logs/
 MESSAGE
 .no-review
 
-#temp 임시로 무시하는 곳
+#하네스쪽은 무시하게
 .claude
 .codex
 .claude
 .codexplugin
 .claudeplugin
 .githooks
+
+#문서
 docs
 jobs
+
+# #temp 임시로 무시하는 곳
+
