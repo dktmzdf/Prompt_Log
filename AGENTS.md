@@ -7,12 +7,15 @@
    - `tests/`: 테스트.
    - `hooks/`: 플러그인 설정 폴더, 스킬과 설계 문서의 위치 안내.
    - [Python 개발 가이드](dev-stack-python.md): 구현 원칙, 예제, 외부 입력 처리 규칙.
+   - [RAG 명세](rag-spec.md): 로그 검색·질의 기능의 목적, 아키텍처, 설계 결정, 단계.
+     범위 제외 항목은 [별도 문서](docs/rag-out-of-scope.md)에 있다. 사용자가 읽으라고 할 떄만 읽을 것
    - [작업 인수 조건](task-acceptance.md): 작업 범위와 검증 근거를 기록하는 양식.
    - [세션 인계](docs/codex-handoff.md): 작업 상태와 실패한 접근·재시도 조건.
    - `Ignore/`: 사용자가 프로젝트나 에이전트에 적용하기전 확인을 위해 임시로 파일을 가져다 놓는 파일 여기 있는 파일은 완전히 무시할것
 
 2. **빌드·테스트·개발 명령어**
-   - Python 3.11 이상과 표준 라이브러리만 사용.
+   - Python 3.11 이상 사용. 외부 라이브러리 허용.
+   - 의존성은 최소한으로 유지하고 추가할 때 목적을 설명.
    - 별도 빌드 단계 없음.
    - 전체 테스트: `python -B scripts/export.py --selftest`
    - 테스트 상세 실행: `python -B -m unittest discover -s tests -v`
