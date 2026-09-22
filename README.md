@@ -110,6 +110,10 @@ Python 3.11 이상이 필요합니다. 리포트 내보내기 자체는 표준 �
 
 ## 코드 구조와 공부 순서
 
+개발용 테스트·리뷰 하네스의 설정과 스위치는 [하네스 안내](docs/harness.md)를 참고합니다.
+`python -B scripts/export.py --selftest`는 프로젝트 테스트와 설치된 하네스 테스트를
+함께 실행합니다. `.no-review` 파일이 있으면 LLM 리뷰만 생략합니다.
+
 `scripts/export.py`는 CLI·훅 진입점이고, 구현은 `scripts/promptlog/`에 있습니다.
 
 1. `models.py`: 어댑터가 반환하는 `SessionLog`, `Session`, `Event` 계약
@@ -117,7 +121,3 @@ Python 3.11 이상이 필요합니다. 리포트 내보내기 자체는 표준 �
 3. `assemble.py`: 두 소스가 공유하는 날짜·대화 묶음·통계 집계
 4. `render.py`, `text.py`: 출력 직전 절단과 Markdown·JSONL 생성
 5. `service.py`, `storage.py`, `cli.py`: 전체 연결·파일 저장·실행 모드
-
-리팩터링 이유, 동작 차이, 검증 결과와 후속 작업은 [작업 문서](docs/refactoring.md)에
-기록했습니다. 전체 회귀검사는 `python -B scripts/export.py --selftest` 또는
-`python -B -m unittest discover -s tests -v`로 실행합니다.

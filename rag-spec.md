@@ -152,9 +152,7 @@ bge-m3 등이다. **어느 것이 이 코퍼스에 맞는지는 검증되지 않
 
 ### 전체 검증
 
-`python -B scripts/export.py --selftest`. 단 [세션 인계](docs/log-storage-handoff.md)
-8절에 따르면 과거 실행에서 실패가 있었고 원인이 확인되지 않았으므로, **이번 변경으로
-생긴 실패인지 기존 실패인지 구분**한다.
+`python -B scripts/export.py --selftest`. 
 
 ## 5. 정책 변경
 
@@ -172,6 +170,3 @@ bge-m3 등이다. **어느 것이 이 코퍼스에 맞는지는 검증되지 않
 `pyproject.toml`은 첫 의존성을 실제로 추가할 때 만든다. `harness-lightening-plan.md`의
 표준 라이브러리 언급은 특정 시점의 분석 기록이므로 수정하지 않는다.
 
----
-
-이번 작업에서 **하지 않는 것**은 [범위 제외 항목](docs/rag-out-of-scope.md)에 따로 있다.
