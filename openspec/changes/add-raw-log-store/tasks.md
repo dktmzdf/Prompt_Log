@@ -25,15 +25,15 @@
 
 ## 3. 이벤트 식별자
 
-- [ ] 3.1 `models.py`의 `Event`에 `source_id` 필드를 추가한다. 기존 필드와 기본값을
+- [x] 3.1 `models.py`의 `Event`에 `source_id` 필드를 추가한다. 기존 필드와 기본값을
   바꾸지 않는다. 기존 `--selftest` 33건이 그대로 통과하는지 확인한다.
-- [ ] 3.2 `adapters/claude.py`가 행 `uuid`로 `claude:uuid:{uuid}#{kind}` 형태의
+- [x] 3.2 `adapters/claude.py`가 행 `uuid`로 `claude:uuid:{uuid}#{kind}` 형태의
   `source_id`를 채우게 한다. 한 행이 여러 이벤트를 내는 경우(assistant 행의
   `model`/`usage`/본문/`activity`, user 행의 `prompt`/`denial`)에 각각 다른 값이
   나오는지 합성 로그로 검증한다.
-- [ ] 3.3 `usage` iterations가 여러 개인 행에서 `source_id`가 충돌하지 않도록 순번을
+- [x] 3.3 `usage` iterations가 여러 개인 행에서 `source_id`가 충돌하지 않도록 순번을
   덧붙인다. iterations 2개 이상인 합성 로그로 검증한다.
-- [ ] 3.4 `adapters/codex.py`가 native 세션은 item `id`로
+- [x] 3.4 `adapters/codex.py`가 native 세션은 item `id`로
   `codex:item:{id}#{kind}`를, legacy 세션은 `_line_no`로
   `codex:line:{session_key}:{line_no}#{kind}`를 채우게 한다. `id`를 입력 제외 목록에서
   조정한다. native·legacy 합성 로그 양쪽으로 검증한다.

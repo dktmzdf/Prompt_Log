@@ -2,7 +2,7 @@
 
 import re
 
-from ..models import Event, Session, SessionLog
+from ..models import Event, Session, SessionLog, source_ids
 from ..text import json_text
 from .codex_content import codex_text, normalized_type
 
@@ -45,7 +45,7 @@ def legacy_input(body):
     return {**fields, "_raw": body}
 
 
-def native_event(item, ts):
+def native_event(item, ts, issue):
     kind = normalized_type(item.get("type"))
     if kind in ("usermessage", "agentmessage", "reasoning"):
         value = item.get("content")
@@ -56,15 +56,17 @@ def native_event(item, ts):
             kind == "usermessage" and text.lstrip().startswith("<environment_context>")
         ):
             return None
+        named = {
+            "usermessage": "prompt",
+            "agentmessage": "answer",
+            "reasoning": "thinking",
+        }[kind]
         return Event(
-            {
-                "usermessage": "prompt",
-                "agentmessage": "answer",
-                "reasoning": "thinking",
-            }[kind],
+            named,
             ts,
             text=text,
             phase=item.get("phase") if kind == "agentmessage" else None,
+            source_id=issue(named),
         )
     name, inp, output, summary, paths = (
         item.get("type") or "UnknownItem",
@@ -138,7 +140,18 @@ def native_event(item, ts):
         status=tool_status(item),
         summary=summary,
         files=paths,
+        source_id=issue("tool"),
     )
+
+
+def record_prefix(rec, item, session_key):
+    """native item `id`는 재개 복사본에서도 보존되므로 전역 유일하다.
+
+    legacy 세션과 `id` 없는 item만 파일 스코프 줄 번호로 물러난다.
+    """
+    if item and item.get("id"):
+        return f"codex:item:{item['id']}"
+    return f"codex:line:{session_key}:{rec.get('_line_no', 0)}"
 
 
 def parse(rows, session_id=""):
@@ -169,15 +182,20 @@ def parse(rows, session_id=""):
         "cache_write_input_tokens": "cache_creation_input_tokens",
         "reasoning_output_tokens": "reasoning_output_tokens",
     }
+    key = log.session.session_id
     for rec in rows:
         rtype, payload, ts = (
             rec.get("type"),
             rec.get("payload") or {},
             rec.get("timestamp", ""),
         )
+        item = payload.get("item") if isinstance(payload.get("item"), dict) else None
+        issue = source_ids(record_prefix(rec, item, key))
         if rtype == "turn_context":
             if payload.get("model"):
-                log.events.append(Event("model", ts, model=payload["model"]))
+                log.events.append(
+                    Event("model", ts, model=payload["model"], source_id=issue("model"))
+                )
             continue
         if rtype != "event_msg":
             continue
@@ -199,13 +217,14 @@ def parse(rows, session_id=""):
                     ts,
                     tokens=tokens,
                     usage_mode="cumulative" if cumulative else "incremental",
+                    source_id=issue("usage"),
                 )
             )
             continue
         if native:
             if ptype != "itemcompleted":
                 continue
-            event = native_event(payload.get("item") or {}, ts)
+            event = native_event(item or {}, ts, issue)
             if event:
                 log.events.append(event)
         else:
@@ -215,7 +234,9 @@ def parse(rows, session_id=""):
                 and text
                 and not text.lstrip().startswith("<environment_context>")
             ):
-                log.events.append(Event("prompt", ts, text=text))
+                log.events.append(
+                    Event("prompt", ts, text=text, source_id=issue("prompt"))
+                )
             elif ptype == "agentmessage":
                 call = re.fullmatch(
                     r"\s*\[external_agent_tool_call:\s*([^\]]+)\]\s*(.*?)\s*\[/external_agent_tool_call\]\s*",
@@ -233,6 +254,7 @@ def parse(rows, session_id=""):
                         ts,
                         name=call.group(1).strip(),
                         input=legacy_input(call.group(2).strip()),
+                        source_id=issue("tool"),
                     )
                     log.events.append(event)
                     pending.append(event)
@@ -240,7 +262,9 @@ def parse(rows, session_id=""):
                     # These markers have neither correlation IDs nor a success flag.
                     pending.pop(0).output = result.group(1).strip()
                 elif text:
-                    log.events.append(Event("answer", ts, text=text))
+                    log.events.append(
+                        Event("answer", ts, text=text, source_id=issue("answer"))
+                    )
         if ts:
-            log.events.append(Event("activity", ts))
+            log.events.append(Event("activity", ts, source_id=issue("activity")))
     return log

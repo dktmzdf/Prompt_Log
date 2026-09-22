@@ -8,7 +8,7 @@ from pathlib import Path
 
 from scripts.promptlog.adapters import claude, codex
 from scripts.promptlog.assemble import assemble, project_name
-from scripts.promptlog.models import Event, Session, SessionLog
+from scripts.promptlog.models import Event, Session, SessionLog, source_ids
 from scripts.promptlog.readers import detect_agent, read_jsonl
 from scripts.promptlog.render import present
 from scripts.promptlog.text import HEAD, TAIL, truncate, truncate_input
@@ -321,7 +321,7 @@ class AdapterTests(unittest.TestCase):
             with self.subTest(data=data):
                 self.assertEqual(
                     codex.native_event(
-                        {"type": "CommandExecution", **data}, at()
+                        {"type": "CommandExecution", **data}, at(), source_ids("t")
                     ).status,
                     status,
                 )
@@ -354,7 +354,7 @@ class AdapterTests(unittest.TestCase):
         ]
         for item, name in cases:
             with self.subTest(item=item):
-                event = codex.native_event(item, at())
+                event = codex.native_event(item, at(), source_ids("t"))
                 self.assertEqual(event.name, name)
                 self.assertIsInstance(event.input, dict)
 
@@ -369,6 +369,7 @@ class AdapterTests(unittest.TestCase):
                 "content": "visible",
             },
             at(),
+            source_ids("t"),
         )
         self.assertEqual(event.name, "NewItem")
         self.assertEqual(event.input, {"type": "NewItem", "custom": {"path": "keep"}})
