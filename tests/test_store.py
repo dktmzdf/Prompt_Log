@@ -1,5 +1,6 @@
-"""저장소 스키마·연결 설정·재사용 회귀."""
+"""저장소 스키마·연결 설정·재사용·무손실 적재 회귀."""
 
+import json
 import sqlite3
 import tempfile
 import threading
@@ -8,6 +9,7 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 
 from scripts.promptlog import store
+from scripts.promptlog.models import Session
 
 
 @contextmanager
@@ -127,6 +129,145 @@ class ReuseTests(unittest.TestCase):
                 with closing(store.connect(path)) as conn:
                     version = conn.execute("PRAGMA user_version").fetchone()[0]
                     self.assertEqual(version, store.SCHEMA_VERSION)
+
+
+def a_session(session_id="s1", agent="claude"):
+    return Session(agent, session_id, cwd="/work/proj", branch="main")
+
+
+def write_bytes(path, payload):
+    path.write_bytes(payload)
+    return payload
+
+
+class IngestTests(unittest.TestCase):
+    def assert_roundtrip(self, payload, name="source.jsonl"):
+        with store_dir() as db, closing(store.connect(db)) as conn:
+            source = write_bytes(db.parent / name, payload)
+            key, added = store.ingest(conn, db.parent / name, a_session())
+            self.assertEqual(store.raw_text(conn, key).encode("utf-8"), source)
+            return added
+
+    def test_lines_roundtrip_byte_for_byte(self):
+        rows = [{"type": "user", "uuid": f"u{n}", "n": n} for n in range(5)]
+        payload = ("\n".join(json.dumps(r) for r in rows) + "\n").encode("utf-8")
+        self.assertEqual(self.assert_roundtrip(payload), 5)
+
+    def test_missing_trailing_newline_roundtrips(self):
+        payload = b'{"a": 1}\n{"b": 2}'
+        self.assert_roundtrip(payload)
+
+    def test_crlf_endings_roundtrip(self):
+        payload = b'{"a": 1}\r\n{"b": 2}\r\n'
+        self.assert_roundtrip(payload)
+
+    def test_byte_order_mark_is_preserved(self):
+        payload = b'\xef\xbb\xbf{"a": 1}\n'
+        self.assert_roundtrip(payload)
+
+    def test_non_ascii_content_roundtrips(self):
+        payload = '{"text": "한국어와 이모지 🙂"}\n'.encode("utf-8")
+        self.assert_roundtrip(payload)
+
+    def test_unparseable_line_is_preserved(self):
+        payload = b'{"a": 1}\n}\n{"b": 2}\n'
+        with store_dir() as db, closing(store.connect(db)) as conn:
+            source = db.parent / "broken.jsonl"
+            write_bytes(source, payload)
+            key, _ = store.ingest(conn, source, a_session())
+            bodies = conn.execute(
+                "SELECT body FROM raw_line WHERE session_key = ? ORDER BY line_no",
+                (key,),
+            ).fetchall()
+            self.assertEqual(bodies[1][0], "}\n")
+            self.assertEqual(store.raw_text(conn, key).encode("utf-8"), payload)
+
+    def test_content_over_four_kilobytes_is_not_truncated(self):
+        big = "x" * 20_000
+        payload = (json.dumps({"type": "user", "output": big}) + "\n").encode("utf-8")
+        with store_dir() as db, closing(store.connect(db)) as conn:
+            source = db.parent / "big.jsonl"
+            write_bytes(source, payload)
+            key, _ = store.ingest(conn, source, a_session())
+            stored = json.loads(store.raw_text(conn, key))
+            self.assertEqual(len(stored["output"]), 20_000)
+            self.assertEqual(store.raw_text(conn, key).encode("utf-8"), payload)
+
+    def test_session_metadata_is_recorded(self):
+        with store_dir() as db, closing(store.connect(db)) as conn:
+            source = db.parent / "meta.jsonl"
+            write_bytes(source, b'{"a": 1}\n')
+            key, _ = store.ingest(conn, source, a_session("abc", "codex"), "t0", "t9")
+            row = conn.execute(
+                "SELECT agent, cwd, branch, ts_first, ts_last, ingested_lines"
+                " FROM session WHERE session_key = ?",
+                (key,),
+            ).fetchone()
+            self.assertEqual(key, "abc")
+            self.assertEqual(row[:5], ("codex", "/work/proj", "main", "t0", "t9"))
+            self.assertEqual(row[5], 1)
+
+
+class IncrementalTests(unittest.TestCase):
+    def test_only_appended_lines_are_written(self):
+        with store_dir() as db, closing(store.connect(db)) as conn:
+            source = db.parent / "grow.jsonl"
+            write_bytes(source, b'{"a": 1}\n{"b": 2}\n')
+            key, first = store.ingest(conn, source, a_session())
+            self.assertEqual(first, 2)
+
+            with open(source, "ab") as stream:
+                stream.write(b'{"c": 3}\n{"d": 4}\n')
+            _, second = store.ingest(conn, source, a_session())
+
+            self.assertEqual(second, 2)
+            total = conn.execute(
+                "SELECT COUNT(*) FROM raw_line WHERE session_key = ?", (key,)
+            ).fetchone()[0]
+            self.assertEqual(total, 4)
+            self.assertEqual(
+                store.raw_text(conn, key).encode("utf-8"), source.read_bytes()
+            )
+
+    def test_reingesting_unchanged_file_writes_nothing(self):
+        with store_dir() as db, closing(store.connect(db)) as conn:
+            source = db.parent / "same.jsonl"
+            write_bytes(source, b'{"a": 1}\n{"b": 2}\n')
+            key, _ = store.ingest(conn, source, a_session())
+            before = store.raw_text(conn, key)
+
+            _, again = store.ingest(conn, source, a_session())
+
+            self.assertEqual(again, 0)
+            total = conn.execute(
+                "SELECT COUNT(*) FROM raw_line WHERE session_key = ?", (key,)
+            ).fetchone()[0]
+            self.assertEqual(total, 2)
+            self.assertEqual(store.raw_text(conn, key), before)
+
+    def test_partial_final_line_is_completed_on_next_ingest(self):
+        with store_dir() as db, closing(store.connect(db)) as conn:
+            source = db.parent / "partial.jsonl"
+            write_bytes(source, b'{"a": 1}\n{"b": ')
+            key, _ = store.ingest(conn, source, a_session())
+            self.assertEqual(
+                conn.execute(
+                    "SELECT ingested_lines FROM session WHERE session_key = ?", (key,)
+                ).fetchone()[0],
+                1,
+            )
+
+            with open(source, "ab") as stream:
+                stream.write(b"2}\n")
+            store.ingest(conn, source, a_session())
+
+            total = conn.execute(
+                "SELECT COUNT(*) FROM raw_line WHERE session_key = ?", (key,)
+            ).fetchone()[0]
+            self.assertEqual(total, 2)
+            self.assertEqual(
+                store.raw_text(conn, key).encode("utf-8"), source.read_bytes()
+            )
 
 
 if __name__ == "__main__":
