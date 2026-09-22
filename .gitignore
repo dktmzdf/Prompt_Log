@@ -29,6 +29,7 @@ MESSAGE
 .claude
 .codex
 .claude
+.agents
 .codexplugin
 .claudeplugin
 .githooks
