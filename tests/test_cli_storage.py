@@ -12,7 +12,9 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.promptlog import cli, storage
+from contextlib import closing
+
+from scripts.promptlog import cli, service, storage, store
 from scripts.promptlog.service import export
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -160,3 +162,68 @@ class CLITests(unittest.TestCase):
             failed = run("--selftest", cwd=root, entry=entry)
             self.assertEqual(failed.returncode, 1, failed.stderr)
             self.assertIn("intentional", failed.stderr)
+
+
+def report_files(root):
+    """저장소 파일(`promptlog.db`와 WAL 부속)을 뺀 리포트 파일의 상대 경로와 내용."""
+    return {
+        str(path.relative_to(root)): path.read_bytes()
+        for path in sorted(Path(root).rglob("*"))
+        if path.is_file() and not path.name.startswith(store.STORE_NAME)
+    }
+
+
+class StoreWiringTests(unittest.TestCase):
+    def test_export_archives_raw_lines_and_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = source_at(root / "source.jsonl")
+            export(source, report_root=root / "reports")
+            db = store.store_path(root / "reports")
+            with closing(store.connect(db)) as conn:
+                raw = store.raw_text(conn, "test-session")
+                events = conn.execute("SELECT COUNT(*) FROM session_event").fetchone()[0]
+            self.assertEqual(raw.encode("utf-8"), source.read_bytes())
+            self.assertGreater(events, 0)
+
+    def test_reports_are_identical_with_or_without_store(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = source_at(root / "source.jsonl")
+            export(source, report_root=root / "with")
+            with patch.object(service, "archive"):
+                export(source, report_root=root / "without")
+            self.assertEqual(report_files(root / "with"), report_files(root / "without"))
+            self.assertTrue(report_files(root / "with"))
+
+    def test_store_failure_keeps_reports_and_goes_to_stderr(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = source_at(root / "source.jsonl")
+            err = io.StringIO()
+            with patch.object(store, "ingest", side_effect=RuntimeError("boom")):
+                with redirect_stderr(err):
+                    written = export(source, report_root=root / "reports")
+            self.assertEqual(len(written), 1)
+            for suffix in (".md", ".jsonl"):
+                self.assertTrue(Path(str(written[0][0]) + suffix).exists())
+            self.assertIn("prompt-log store: boom", err.getvalue())
+
+    def test_cli_exit_code_is_unchanged_by_store_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = source_at(root / "source.jsonl")
+            with patch.object(store, "ingest", side_effect=RuntimeError("boom")):
+                with redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+                    code = cli.main([str(source), "--output", str(root / "reports")])
+            self.assertEqual(code, 0)
+
+    def test_store_follows_output_root_not_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = source_at(root / "source.jsonl")
+            with patch.object(store, "connect", wraps=store.connect) as spy:
+                export(source, report_root=root / "reports")
+            opened = [Path(call.args[0]) for call in spy.call_args_list]
+            self.assertEqual(opened, [store.store_path(root / "reports")])
+            self.assertNotIn(store.store_path(storage.REPORT_ROOT), opened)

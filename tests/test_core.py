@@ -372,7 +372,10 @@ class AdapterTests(unittest.TestCase):
             source_ids("t"),
         )
         self.assertEqual(event.name, "NewItem")
-        self.assertEqual(event.input, {"type": "NewItem", "custom": {"path": "keep"}})
+        self.assertEqual(
+            event.input,
+            {"type": "NewItem", "id": "private-id", "custom": {"path": "keep"}},
+        )
         self.assertEqual(event.output, "visible")
 
     def test_legacy_multiline_and_fifo(self):

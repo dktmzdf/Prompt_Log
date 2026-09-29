@@ -1,12 +1,15 @@
 """SQLite 정본 저장소. 원본 줄은 여기에만 무절단으로 남고 리포트는 관여하지 않는다."""
 
+import json
 import os
 import sqlite3
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA_VERSION = 1
 BUSY_TIMEOUT_MS = 5000
+STORE_NAME = "promptlog.db"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS session (
@@ -99,6 +102,11 @@ def connect(path):
         raise
 
 
+def store_path(report_root):
+    """리포트 루트 아래에 둔다. `--output`을 바꾸면 저장소도 함께 옮겨 간다."""
+    return Path(report_root) / STORE_NAME
+
+
 def session_key_of(session, source_path):
     return str(session.session_id or Path(source_path).stem)
 
@@ -175,3 +183,87 @@ def raw_text(conn, key):
         "SELECT body FROM raw_line WHERE session_key = ? ORDER BY line_no", (key,)
     )
     return "".join(row[0] for row in rows)
+
+
+def event_row(event):
+    """필터·정렬에 쓰는 값은 컬럼으로, 나머지는 `payload` JSON으로 나눈다."""
+    is_tool = event.kind == "tool"
+    rest = asdict(event)
+    for name in ("source_id", "kind", "ts", "status", "output" if is_tool else "text"):
+        rest.pop(name)
+    if is_tool:
+        rest.pop("name")
+    return (
+        event.source_id,
+        event.kind,
+        event.ts,
+        event.output if is_tool else event.text,
+        event.name if is_tool else None,
+        event.status if is_tool else None,
+        json.dumps(rest, ensure_ascii=False, default=str),
+    )
+
+
+def assign_turns(events):
+    """첫 프롬프트 이전은 턴 0, 프롬프트마다 새 턴.
+
+    `assemble()`의 날짜 버킷을 펼친 것과 같은 규칙이다 — 비프롬프트 이벤트는 가장 최근
+    프롬프트에 귀속된다. 두 구현이 어긋나지 않는지는 회귀 테스트가 지킨다.
+    """
+    turns, current = [], 0
+    for event in events:
+        if event.kind == "prompt":
+            current += 1
+        turns.append(current)
+    return turns
+
+
+def turn_rows(key, events, turns):
+    spans = {}
+    for event, turn in zip(events, turns):
+        start, end, prompt = spans.get(turn, (None, None, None))
+        if event.kind == "prompt" and prompt is None:
+            prompt = event.text
+        if event.ts:
+            start = min(start, event.ts) if start else event.ts
+            end = max(end, event.ts) if end else event.ts
+        spans[turn] = (start, end, prompt)
+    return [(key, turn, *span) for turn, span in sorted(spans.items())]
+
+
+def index_log(conn, key, log):
+    """파싱된 이벤트를 색인한다. `session` 행이 먼저 있어야 한다(외래키).
+
+    이벤트는 `source_id`로 합쳐지고, 세션 귀속과 턴은 세션 단위로 지웠다가 다시 쓴다.
+    그래서 재개 세션의 공유 이벤트는 한 행이 되고, 재적재해도 결과가 같다.
+    """
+    turns = assign_turns(log.events)
+    links = [
+        (key, event.source_id, seq, turn)
+        for seq, (event, turn) in enumerate(zip(log.events, turns))
+    ]
+    with conn:
+        # REPLACE는 지웠다 다시 넣어 행마다 session_event 외래키 검사를 부른다. 매 턴
+        # 전체를 다시 색인하므로 O(n^2)이 된다. 제자리 갱신은 삭제가 없다.
+        conn.executemany(
+            "INSERT INTO event (source_id, kind, ts, text, tool_name, status, payload)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(source_id) DO UPDATE SET"
+            " kind = excluded.kind, ts = excluded.ts, text = excluded.text,"
+            " tool_name = excluded.tool_name, status = excluded.status,"
+            " payload = excluded.payload",
+            [event_row(event) for event in log.events],
+        )
+        conn.execute("DELETE FROM session_event WHERE session_key = ?", (key,))
+        conn.execute("DELETE FROM turn WHERE session_key = ?", (key,))
+        conn.executemany(
+            "INSERT INTO session_event (session_key, source_id, seq, turn_no)"
+            " VALUES (?, ?, ?, ?)",
+            links,
+        )
+        conn.executemany(
+            "INSERT INTO turn (session_key, turn_no, ts_start, ts_end, prompt_text)"
+            " VALUES (?, ?, ?, ?, ?)",
+            turn_rows(key, log.events, turns),
+        )
+    return len(links)

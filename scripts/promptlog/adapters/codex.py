@@ -126,7 +126,7 @@ def native_event(item, ts, issue):
         inp = {
             k: v
             for k, v in item.items()
-            if k not in ("id", "raw_content", "encrypted_content", "content")
+            if k not in ("raw_content", "encrypted_content", "content")
         }
         output = item.get("content") or ""
     if not isinstance(inp, dict):
