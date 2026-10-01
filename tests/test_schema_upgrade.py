@@ -80,6 +80,12 @@ def raw_dump(path):
         return tables
 
 
+def index_names(path):
+    with closing(sqlite3.connect(str(path))) as raw:
+        rows = raw.execute("SELECT name FROM sqlite_master WHERE type = 'index'").fetchall()
+        return {row[0] for row in rows}
+
+
 def turn_columns(path):
     with closing(sqlite3.connect(str(path))) as raw:
         return [row[1] for row in raw.execute("PRAGMA table_info(turn)")]
@@ -92,6 +98,7 @@ class FreshStoreTests(unittest.TestCase):
                 pass
             self.assertEqual(raw_dump(path)["version"], 2)
             self.assertIn("content_hash", turn_columns(path))
+            self.assertIn("ix_se_event", index_names(path))
 
 
 class UpgradeTests(unittest.TestCase):
@@ -106,6 +113,7 @@ class UpgradeTests(unittest.TestCase):
             before.pop("version")
             self.assertEqual(after, before)
             self.assertEqual(turn_columns(path).count("content_hash"), 1)
+            self.assertIn("ix_se_event", index_names(path))
             with closing(sqlite3.connect(str(path))) as raw:
                 hashes = raw.execute("SELECT content_hash FROM turn").fetchall()
             self.assertEqual(hashes, [(None,)])
@@ -131,6 +139,7 @@ class UpgradeTests(unittest.TestCase):
             self.assertEqual(raw_dump(path), before)
             self.assertEqual(before["version"], 1)
             self.assertNotIn("content_hash", turn_columns(path))
+            self.assertNotIn("ix_se_event", index_names(path))
 
     def test_concurrent_upgrades_both_succeed_once(self):
         with store_dir() as path:

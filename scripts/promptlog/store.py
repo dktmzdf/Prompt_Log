@@ -1,5 +1,6 @@
 """SQLite 정본 저장소. 원본 줄은 여기에만 무절단으로 남고 리포트는 관여하지 않는다."""
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -53,6 +54,7 @@ CREATE TABLE IF NOT EXISTS session_event (
 );
 
 CREATE INDEX IF NOT EXISTS ix_se_order ON session_event(session_key, seq);
+CREATE INDEX IF NOT EXISTS ix_se_event ON session_event(source_id);
 
 CREATE TABLE IF NOT EXISTS turn (
   session_key TEXT NOT NULL REFERENCES session,
@@ -68,7 +70,12 @@ CREATE TABLE IF NOT EXISTS turn (
 TABLES = ("session", "raw_line", "event", "session_event", "turn")
 
 # 버전 N을 N+1로 올리는 문. 새 파일은 SCHEMA가 최신 정의로 바로 만든다.
-MIGRATIONS = {1: ("ALTER TABLE turn ADD COLUMN content_hash TEXT",)}
+MIGRATIONS = {
+    1: (
+        "ALTER TABLE turn ADD COLUMN content_hash TEXT",
+        "CREATE INDEX IF NOT EXISTS ix_se_event ON session_event(source_id)",
+    )
+}
 
 
 def read_version(conn):
@@ -91,9 +98,8 @@ def upgrade(conn):
     Stop 훅이 병렬로 돌면 다른 연결이 먼저 올렸을 수 있다. 그래서 쓰기 잠금을 잡은 뒤
     버전을 다시 읽는다. 다시 읽지 않으면 두 번째 `ALTER`가 컬럼 중복으로 실패한다.
     """
-    # 여따가 하면 대체 어떻게 예외 잡음?
-    conn.execute("BEGIN IMMEDIATE")
     try:
+        conn.execute("BEGIN IMMEDIATE")
         current = read_version(conn)
         refuse_newer(current)
         for version in range(current, SCHEMA_VERSION):
@@ -283,9 +289,16 @@ def assign_turns(events):
     return turns
 
 
-def turn_rows(key, events, turns):
-    spans = {}
-    for event, turn in zip(events, turns):
+def fingerprint(rows):
+    """턴의 색인 행을 순서대로 직렬화한 해시. `seq`는 넣지 않는다 — 앞쪽에 이벤트가 끼어들면
+    뒤의 값이 전부 밀려 모든 턴의 지문이 바뀐다. ASCII 이스케이프라 깨진 문자도 안전하다."""
+    return hashlib.sha256(json.dumps(rows).encode("utf-8")).hexdigest()
+
+
+def turn_rows(key, events, turns, rows):
+    """턴별 구간·첫 프롬프트·지문. `rows`는 `event` 표에 쓰는 `event_row()` 값 그대로다."""
+    spans, grouped = {}, {}
+    for event, turn, row in zip(events, turns, rows):
         start, end, prompt = spans.get(turn, (None, None, None))
         if event.kind == "prompt" and prompt is None:
             prompt = event.text
@@ -293,7 +306,11 @@ def turn_rows(key, events, turns):
             start = min(start, event.ts) if start else event.ts
             end = max(end, event.ts) if end else event.ts
         spans[turn] = (start, end, prompt)
-    return [(key, turn, *span) for turn, span in sorted(spans.items())]
+        grouped.setdefault(turn, []).append(row)
+    return [
+        (key, turn, *span, fingerprint(grouped[turn]))
+        for turn, span in sorted(spans.items())
+    ]
 
 
 def index_log(conn, key, log):
@@ -306,13 +323,7 @@ def index_log(conn, key, log):
         return write_index(conn, key, log)
 
 
-def write_index(conn, key, log):
-    """`index_log`의 본체. 커밋하지 않으므로 여러 세션을 한 트랜잭션에 묶을 수 있다."""
-    turns = assign_turns(log.events)
-    links = [
-        (key, event.source_id, seq, turn)
-        for seq, (event, turn) in enumerate(zip(log.events, turns))
-    ]
+def upsert_events(conn, rows):
     # REPLACE는 지웠다 다시 넣어 행마다 session_event 외래키 검사를 부른다. 매 턴
     # 전체를 다시 색인하므로 O(n^2)이 된다. 제자리 갱신은 삭제가 없다.
     conn.executemany(
@@ -322,8 +333,51 @@ def write_index(conn, key, log):
         " kind = excluded.kind, ts = excluded.ts, text = excluded.text,"
         " tool_name = excluded.tool_name, status = excluded.status,"
         " payload = excluded.payload",
-        [event_row(event) for event in log.events],
+        rows,
     )
+
+
+def shared_turns(conn, key):
+    """이 세션과 이벤트를 공유하는 다른 세션의 (세션, 턴) 쌍. 재개 세션 쌍이 여기 걸린다."""
+    return conn.execute(
+        "SELECT DISTINCT o.session_key, o.turn_no FROM session_event me"
+        " JOIN session_event o ON o.source_id = me.source_id"
+        " AND o.session_key != me.session_key WHERE me.session_key = ?",
+        (key,),
+    ).fetchall()
+
+
+def turn_event_rows(conn, key, turn_no):
+    """`event` 표에 저장된 값으로 그 턴을 구성하는 행. `event_row()`와 같은 모양이다."""
+    return conn.execute(
+        "SELECT e.source_id, e.kind, e.ts, e.text, e.tool_name, e.status, e.payload"
+        " FROM session_event se JOIN event e ON e.source_id = se.source_id"
+        " WHERE se.session_key = ? AND se.turn_no = ? ORDER BY se.seq",
+        (key, turn_no),
+    ).fetchall()
+
+
+def refresh_shared_turns(conn, key):
+    """공유 이벤트 행은 마지막 적재가 이긴다. 그 행을 쓰는 다른 세션의 턴 지문도 저장된
+    내용 기준으로 다시 맞춘다. 지문은 언제나 `event` 표가 말하는 턴 내용의 해시여야 한다."""
+    for other, turn_no in shared_turns(conn, key):
+        digest = fingerprint(turn_event_rows(conn, other, turn_no))
+        conn.execute(
+            "UPDATE turn SET content_hash = ? WHERE session_key = ? AND turn_no = ?"
+            " AND content_hash IS NOT ?",
+            (digest, other, turn_no, digest),
+        )
+
+
+def write_index(conn, key, log):
+    """`index_log`의 본체. 커밋하지 않으므로 여러 세션을 한 트랜잭션에 묶을 수 있다."""
+    events, turns = log.events, assign_turns(log.events)
+    rows = [event_row(event) for event in events]
+    links = [
+        (key, event.source_id, seq, turn)
+        for seq, (event, turn) in enumerate(zip(events, turns))
+    ]
+    upsert_events(conn, rows)
     conn.execute("DELETE FROM session_event WHERE session_key = ?", (key,))
     conn.execute("DELETE FROM turn WHERE session_key = ?", (key,))
     conn.executemany(
@@ -332,8 +386,9 @@ def write_index(conn, key, log):
         links,
     )
     conn.executemany(
-        "INSERT INTO turn (session_key, turn_no, ts_start, ts_end, prompt_text)"
-        " VALUES (?, ?, ?, ?, ?)",
-        turn_rows(key, log.events, turns),
+        "INSERT INTO turn (session_key, turn_no, ts_start, ts_end, prompt_text,"
+        " content_hash) VALUES (?, ?, ?, ?, ?, ?)",
+        turn_rows(key, events, turns, rows),
     )
+    refresh_shared_turns(conn, key)
     return len(links)

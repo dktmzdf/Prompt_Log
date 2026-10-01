@@ -4,9 +4,10 @@
 
 ### Requirement: 턴 변경 감지
 
-Each indexed turn SHALL carry a content fingerprint that is derived only from
-the turn's own indexed content, so that a downstream consumer can tell which
-turns changed since it last processed them without keeping index rows alive.
+Each indexed turn SHALL carry a content fingerprint that reflects the content
+currently stored for that turn, including events it shares with other sessions,
+so that a downstream consumer can tell which turns changed since it last
+processed them without keeping index rows alive.
 
 #### Scenario: 영향받지 않은 턴은 지문이 그대로다
 
@@ -35,6 +36,23 @@ turns changed since it last processed them without keeping index rows alive.
 
 - **WHEN** 같은 저장 내용에 대해 재색인을 실행한다
 - **THEN** 모든 턴의 지문이 재색인 전과 같다
+
+#### Scenario: 다른 세션이 공유 이벤트를 바꾸면 이 세션의 해당 턴 지문도 바뀐다
+
+- **WHEN** 두 세션이 어떤 이벤트를 공유하고, 한쪽 세션에서 그 이벤트의 내용이 바뀐다
+  (예: 재개 세션에서 공유 도구 호출에 결과가 붙는다)
+- **THEN** 다른 세션에서 그 이벤트가 속한 턴의 지문도 저장된 내용에 맞게 바뀌고, 그
+  세션의 나머지 턴 지문은 그대로다
+
+#### Scenario: 지문은 저장된 턴 내용과 항상 일치한다
+
+- **WHEN** 세션들을 어떤 순서로 적재하거나 재적재하거나 재색인하든
+- **THEN** 모든 턴의 지문이 저장된 이벤트 내용으로 다시 계산한 값과 같다
+
+#### Scenario: 이벤트를 공유하지 않는 세션은 영향받지 않는다
+
+- **WHEN** 다른 세션을 적재한다
+- **THEN** 그 세션과 이벤트를 공유하지 않는 세션의 지문은 바뀌지 않는다
 
 #### Scenario: 아직 계산되지 않은 지문은 구분된다
 
