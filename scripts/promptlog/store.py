@@ -7,7 +7,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 BUSY_TIMEOUT_MS = 5000
 STORE_NAME = "promptlog.db"
 
@@ -60,23 +60,63 @@ CREATE TABLE IF NOT EXISTS turn (
   ts_start    TEXT,
   ts_end      TEXT,
   prompt_text TEXT,
+  content_hash TEXT,
   PRIMARY KEY (session_key, turn_no)
 );
 """
 
 TABLES = ("session", "raw_line", "event", "session_event", "turn")
 
+# 버전 N을 N+1로 올리는 문. 새 파일은 SCHEMA가 최신 정의로 바로 만든다.
+MIGRATIONS = {1: ("ALTER TABLE turn ADD COLUMN content_hash TEXT",)}
 
-def ensure_schema(conn):
-    """스키마를 적용하고 버전을 맞춘다. 이미 최신인 DB에 다시 불러도 안전하다."""
-    version = conn.execute("PRAGMA user_version").fetchone()[0]
+
+def read_version(conn):
+    return conn.execute("PRAGMA user_version").fetchone()[0]
+
+
+def set_version(conn, version):
+    # 파라미터 바인딩을 못 쓰는 PRAGMA다. 값은 코드 상수라 외부 입력이 아니다.
+    conn.execute(f"PRAGMA user_version = {int(version)}")
+
+
+def refuse_newer(version):
     if version > SCHEMA_VERSION:
         raise ValueError(f"저장소 스키마 버전 {version}이 이 코드({SCHEMA_VERSION})보다 새롭습니다")
-    conn.executescript(SCHEMA)
-    if version != SCHEMA_VERSION:
-        # 파라미터 바인딩을 못 쓰는 PRAGMA다. 값은 코드 상수라 외부 입력이 아니다.
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-    conn.commit()
+
+
+def upgrade(conn):
+    """버전별 문을 쓰기 트랜잭션 하나로 실행한다. 실패하면 이전 버전 그대로 남는다.
+
+    Stop 훅이 병렬로 돌면 다른 연결이 먼저 올렸을 수 있다. 그래서 쓰기 잠금을 잡은 뒤
+    버전을 다시 읽는다. 다시 읽지 않으면 두 번째 `ALTER`가 컬럼 중복으로 실패한다.
+    """
+    # 여따가 하면 대체 어떻게 예외 잡음?
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        current = read_version(conn)
+        refuse_newer(current)
+        for version in range(current, SCHEMA_VERSION):
+            for statement in MIGRATIONS[version]:
+                conn.execute(statement)
+        if current != SCHEMA_VERSION:
+            set_version(conn, SCHEMA_VERSION)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def ensure_schema(conn):
+    """스키마를 최신 버전으로 맞춘다. 이미 최신인 DB에 다시 불러도 안전하다."""
+    version = read_version(conn)
+    refuse_newer(version)
+    if version == 0:
+        conn.executescript(SCHEMA)
+        set_version(conn, SCHEMA_VERSION)
+        conn.commit()
+    elif version < SCHEMA_VERSION:
+        upgrade(conn)
     return conn
 
 

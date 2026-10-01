@@ -37,6 +37,16 @@ def names_of(conn, kind):
     return {row[0] for row in rows}
 
 
+def refusal_state(path):
+    """버전·스키마 정의·데이터. 거부된 저장소는 이 셋이 하나도 바뀌면 안 된다."""
+    with closing(sqlite3.connect(str(path))) as raw:
+        return (
+            raw.execute("PRAGMA user_version").fetchone()[0],
+            raw.execute("SELECT type, name, sql FROM sqlite_master ORDER BY name").fetchall(),
+            raw.execute("SELECT * FROM session").fetchall(),
+        )
+
+
 class SchemaTests(unittest.TestCase):
     def test_schema_creates_every_table_and_index(self):
         with store_dir() as path, closing(store.connect(path)) as conn:
@@ -59,10 +69,16 @@ class SchemaTests(unittest.TestCase):
             with closing(store.connect(path)):
                 pass
             with closing(sqlite3.connect(str(path))) as raw:
+                raw.execute(
+                    "INSERT INTO session (session_key, agent, source_path) VALUES ('s', 'a', 'p')"
+                )
                 raw.execute(f"PRAGMA user_version = {store.SCHEMA_VERSION + 1}")
                 raw.commit()
+            before = refusal_state(path)
             with self.assertRaises(ValueError):
                 store.connect(path)
+            self.assertEqual(refusal_state(path), before)
+            self.assertEqual(before[0], store.SCHEMA_VERSION + 1)
 
 
 class ConnectionTests(unittest.TestCase):
