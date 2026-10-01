@@ -185,6 +185,31 @@ def raw_text(conn, key):
     return "".join(row[0] for row in rows)
 
 
+def raw_lines(conn, key):
+    """적재된 원본 줄을 순서대로 낸다. 첫 줄 BOM은 `read_jsonl`(utf-8-sig)처럼 벗긴다."""
+    rows = conn.execute(
+        "SELECT line_no, body FROM raw_line WHERE session_key = ? ORDER BY line_no", (key,)
+    )
+    for line_no, body in rows:
+        yield body.removeprefix("﻿") if line_no == 0 else body
+
+
+def stored_sessions(conn):
+    """재색인 대상. 원본 파일 경로는 파일명(stem)만 쓰고 파일은 열지 않는다."""
+    return conn.execute(
+        "SELECT session_key, agent, source_path FROM session ORDER BY session_key"
+    ).fetchall()
+
+
+def clear_index(conn):
+    """색인 테이블만 비운다. `session`·`raw_line`은 정본이라 건드리지 않는다.
+
+    커밋하지 않는다. 호출자가 재색인 전체와 한 트랜잭션으로 묶는다.
+    """
+    for table in ("turn", "session_event", "event"):
+        conn.execute(f"DELETE FROM {table}")  # 코드 상수 테이블명
+
+
 def event_row(event):
     """필터·정렬에 쓰는 값은 컬럼으로, 나머지는 `payload` JSON으로 나눈다."""
     is_tool = event.kind == "tool"
@@ -232,38 +257,43 @@ def turn_rows(key, events, turns):
 
 
 def index_log(conn, key, log):
-    """파싱된 이벤트를 색인한다. `session` 행이 먼저 있어야 한다(외래키).
+    """파싱된 이벤트를 색인하고 커밋한다. `session` 행이 먼저 있어야 한다(외래키).
 
     이벤트는 `source_id`로 합쳐지고, 세션 귀속과 턴은 세션 단위로 지웠다가 다시 쓴다.
     그래서 재개 세션의 공유 이벤트는 한 행이 되고, 재적재해도 결과가 같다.
     """
+    with conn:
+        return write_index(conn, key, log)
+
+
+def write_index(conn, key, log):
+    """`index_log`의 본체. 커밋하지 않으므로 여러 세션을 한 트랜잭션에 묶을 수 있다."""
     turns = assign_turns(log.events)
     links = [
         (key, event.source_id, seq, turn)
         for seq, (event, turn) in enumerate(zip(log.events, turns))
     ]
-    with conn:
-        # REPLACE는 지웠다 다시 넣어 행마다 session_event 외래키 검사를 부른다. 매 턴
-        # 전체를 다시 색인하므로 O(n^2)이 된다. 제자리 갱신은 삭제가 없다.
-        conn.executemany(
-            "INSERT INTO event (source_id, kind, ts, text, tool_name, status, payload)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)"
-            " ON CONFLICT(source_id) DO UPDATE SET"
-            " kind = excluded.kind, ts = excluded.ts, text = excluded.text,"
-            " tool_name = excluded.tool_name, status = excluded.status,"
-            " payload = excluded.payload",
-            [event_row(event) for event in log.events],
-        )
-        conn.execute("DELETE FROM session_event WHERE session_key = ?", (key,))
-        conn.execute("DELETE FROM turn WHERE session_key = ?", (key,))
-        conn.executemany(
-            "INSERT INTO session_event (session_key, source_id, seq, turn_no)"
-            " VALUES (?, ?, ?, ?)",
-            links,
-        )
-        conn.executemany(
-            "INSERT INTO turn (session_key, turn_no, ts_start, ts_end, prompt_text)"
-            " VALUES (?, ?, ?, ?, ?)",
-            turn_rows(key, log.events, turns),
-        )
+    # REPLACE는 지웠다 다시 넣어 행마다 session_event 외래키 검사를 부른다. 매 턴
+    # 전체를 다시 색인하므로 O(n^2)이 된다. 제자리 갱신은 삭제가 없다.
+    conn.executemany(
+        "INSERT INTO event (source_id, kind, ts, text, tool_name, status, payload)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)"
+        " ON CONFLICT(source_id) DO UPDATE SET"
+        " kind = excluded.kind, ts = excluded.ts, text = excluded.text,"
+        " tool_name = excluded.tool_name, status = excluded.status,"
+        " payload = excluded.payload",
+        [event_row(event) for event in log.events],
+    )
+    conn.execute("DELETE FROM session_event WHERE session_key = ?", (key,))
+    conn.execute("DELETE FROM turn WHERE session_key = ?", (key,))
+    conn.executemany(
+        "INSERT INTO session_event (session_key, source_id, seq, turn_no)"
+        " VALUES (?, ?, ?, ?)",
+        links,
+    )
+    conn.executemany(
+        "INSERT INTO turn (session_key, turn_no, ts_start, ts_end, prompt_text)"
+        " VALUES (?, ?, ?, ?, ?)",
+        turn_rows(key, log.events, turns),
+    )
     return len(links)

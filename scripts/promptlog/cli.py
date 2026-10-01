@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from .readers import AGENTS, discover
-from .service import export
+from .service import export, reindex
 from .storage import REPORT_ROOT
 
 
@@ -37,6 +37,16 @@ def run_hook(args):
     return 0
 
 
+def run_reindex(args):
+    try:
+        sessions, linked = reindex(args.output)
+    except Exception as exc:
+        print(f"prompt-log reindex: {exc}", file=sys.stderr)
+        return 1
+    print(f"재색인 세션 {sessions} · 이벤트 {linked}")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Claude/Codex 세션 로그를 중립 리포트로 내보냅니다"
@@ -45,6 +55,9 @@ def main(argv=None):
     parser.add_argument("--all", action="store_true", help="발견된 세션을 모두 백필")
     parser.add_argument("--agent", choices=AGENTS)
     parser.add_argument("--selftest", action="store_true", help="회귀검사 실행")
+    parser.add_argument(
+        "--reindex", action="store_true", help="저장된 원본으로 색인 재생성"
+    )
     parser.add_argument("--output", type=Path, default=REPORT_ROOT, help="출력 루트")
     args = parser.parse_args(argv)
     if args.selftest:
@@ -53,6 +66,8 @@ def main(argv=None):
         except Exception as exc:
             print(f"prompt-log selftest: {exc}", file=sys.stderr)
             return 1
+    if args.reindex:
+        return run_reindex(args)
     if not args.all and not args.paths:
         return run_hook(args)
     targets = (

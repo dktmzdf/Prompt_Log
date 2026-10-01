@@ -228,6 +228,25 @@ Stop 훅이 병렬로 돌고 여러 세션이 동시에 진행될 수 있으므�
   마지막 턴 번호를 DB에서 읽어 이어 매긴다. 반쪽 줄 교체분도 같이 갱신해야 한다.
 - **발견**: 그룹 5 구현 중 (Stop 훅 리뷰어 지적)
 
+### 3. 재색인은 원본 경로의 파일명을 적재한 OS 규칙으로 해석한다 — **해결 (그룹 6)**
+
+- **무엇**: 재색인은 `session.source_path`의 stem을 어댑터에 넘긴다. Claude는 이 값으로
+  행을 거르고(`sessionId == stem`) 폴백 `source_id`를 만든다. POSIX의 `Path`는 역슬래시를
+  구분자로 보지 않아, Windows에서 적재한 DB를 POSIX에서 재색인하면 stem이 달라진다.
+- **해결**: `service.stored_stem()`이 `PureWindowsPath`로 stem을 구한다. 역슬래시와 `/`를
+  모두 구분자로 읽으므로 어느 OS에서든 같은 값이 나온다. 스키마 변경은 없다.
+  `test_source_path_separator_does_not_depend_on_host_os`가 지킨다.
+- **발견**: 그룹 6 구현 중 (Stop 훅 리뷰어 지적으로 즉시 해결)
+
+### 4. 재색인이 세션마다 커밋한다 — **해결 (그룹 6)**
+
+- **무엇**: `clear_index` 뒤 `index_log`가 세션마다 커밋해, 중간 실패 시 기존 색인은
+  사라지고 일부 세션만 남았다.
+- **해결**: `index_log`를 커밋하지 않는 `write_index`와 `with conn` 래퍼로 나눴다. export는
+  래퍼를 그대로 쓰고, 재색인은 비우기와 전체 재생성을 한 트랜잭션으로 묶어 실패 시 기존
+  색인으로 되돌린다. `test_failure_rolls_back_to_previous_index`가 지킨다.
+- **발견**: 그룹 6 구현 중 (Stop 훅 리뷰어 지적으로 즉시 해결)
+
 ## Open Questions
 
 - `raw_line`을 압축 블롭으로 접는 시점과 조건. 접지 않아도 동작하므로 뒤로 미룰 수

@@ -11,18 +11,23 @@ SOURCE_ROOTS = {
 }
 
 
-def read_jsonl(path):
+def parse_lines(lines):
+    """줄 번호를 붙여 JSON 객체만 남긴다. 파일과 저장소 원본이 같은 규칙을 쓴다."""
     rows = []
-    with open(path, encoding="utf-8-sig") as stream:
-        for line_no, line in enumerate(stream):
-            try:
-                value = json.loads(line)
-            except ValueError:
-                continue  # A live writer can leave a partial final line.
-            if isinstance(value, dict):
-                value["_line_no"] = line_no
-                rows.append(value)
+    for line_no, line in enumerate(lines):
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue  # A live writer can leave a partial final line.
+        if isinstance(value, dict):
+            value["_line_no"] = line_no
+            rows.append(value)
     return rows
+
+
+def read_jsonl(path):
+    with open(path, encoding="utf-8-sig") as stream:
+        return parse_lines(stream)
 
 
 def detect_agent(path, recs=None):
