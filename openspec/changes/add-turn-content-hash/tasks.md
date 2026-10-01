@@ -47,15 +47,15 @@
 
 ## 3. 재색인과 전체 검증
 
-- [ ] 3.1 재색인 전후로 모든 턴의 `content_hash`가 같은지 검증하는 테스트를 추가한다.
+- [x] 3.1 재색인 전후로 모든 턴의 `content_hash`가 같은지 검증하는 테스트를 추가한다.
   기존 `tests/test_reindex.py`의 색인 스냅샷이 `turn` 전체 컬럼을 비교하므로 지문도
   포함해 통과하는지 함께 확인한다. 업그레이드 직후(`NULL`) 재색인하면 모든 턴이
   채워지는지도 검증한다.
-- [ ] 3.2 `python -B scripts/export.py --selftest`를 실행해 기존 86건과 새 테스트가 모두
-  통과하는지 확인한다.
-- [ ] 3.3 실제 저장소 `~/agent-prompt-logs/promptlog.db`를 임시 디렉터리로 복사해
+- [x] 3.2 `python -B scripts/export.py --selftest`를 실행해 기존 테스트와 새 테스트가 모두
+  통과하는지 확인한다. (105건 통과, 자기검사 26항목)
+- [x] 3.3 실제 저장소 `~/agent-prompt-logs/promptlog.db`를 임시 디렉터리로 복사해
   (원본 저장소는 열지 않는다) 새 코드로 연다. 버전 2로 업그레이드되고 `raw_line`이 복사
   전과 같은지 확인한 뒤, 복사본에 `--reindex`를 실행해 `content_hash`가 `NULL`인 턴이
   남지 않는지 확인한다.
-- [ ] 3.4 실제 9.0MB 세션(`0ec719f4`)을 임시 출력 루트에 export하는 시간을 이 변경 전후로
+- [x] 3.4 실제 9.0MB 세션(`0ec719f4`)을 임시 출력 루트에 export하는 시간을 이 변경 전후로
   재서 design.md Risks에 해시 계산 비용으로 기록한다.

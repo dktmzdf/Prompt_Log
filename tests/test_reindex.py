@@ -2,6 +2,7 @@
 
 import io
 import json
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -13,6 +14,7 @@ from scripts.promptlog.service import export, reindex
 from tests.test_store import mixed_rows
 
 INDEX_TABLES = ("event", "session_event", "turn")
+HEX64 = re.compile(r"[0-9a-f]{64}")
 
 
 def codex_native():
@@ -114,6 +116,29 @@ class ReindexTests(unittest.TestCase):
         first = (reindex(self.root), snapshot(self.root, INDEX_TABLES))
         second = (reindex(self.root), snapshot(self.root, INDEX_TABLES))
         self.assertEqual(first, second)
+
+    def content_hashes(self):
+        with closing(store.connect(store.store_path(self.root))) as conn:
+            rows = conn.execute("SELECT session_key, turn_no, content_hash FROM turn")
+            return {(key, n): value for key, n, value in rows}
+
+    def test_reindex_keeps_every_content_hash(self):
+        before = self.content_hashes()
+        self.assertTrue(before)
+        self.assertTrue(all(HEX64.fullmatch(value or "") for value in before.values()))
+        self.remove_sources()
+        reindex(self.root)
+        self.assertEqual(self.content_hashes(), before)
+        with closing(store.connect(store.store_path(self.root))) as conn:
+            for (key, n), value in before.items():
+                self.assertEqual(store.fingerprint(store.turn_event_rows(conn, key, n)), value)
+
+    def test_reindex_fills_hashes_left_null_by_upgrade(self):
+        before = self.content_hashes()
+        self.set_session("UPDATE turn SET content_hash = NULL")
+        self.assertEqual(set(self.content_hashes().values()), {None})
+        reindex(self.root)
+        self.assertEqual(self.content_hashes(), before)
 
     def test_raw_lines_are_untouched(self):
         before = snapshot(self.root, ("session", "raw_line"))
